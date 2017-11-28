@@ -74,9 +74,9 @@ function rotate_and_truncate(operator, transformation_matrix)
     return transformation_matrix' * (operator * transformation_matrix)
 end
 
-function single_dmrg_step(sys::Block, env::Block, m::Int)
+function single_dmrg_step(sys::Block, env::Block, χmax::Int)
     # Performs a single DMRG step using `sys` as the system and `env` as the
-    # environment, keeping a maximum of `m` states in the new basis.
+    # environment, keeping a maximum of `χmax` states in the new basis.
 
     @assert isvalid(sys)
     @assert isvalid(env)
@@ -93,11 +93,11 @@ function single_dmrg_step(sys::Block, env::Block, m::Int)
     @assert isvalid(env_enl)
 
     # Construct the full superblock Hamiltonian.
-    m_sys_enl = sys_enl.basis_size
-    m_env_enl = env_enl.basis_size
+    χ_sys_enl = sys_enl.basis_size
+    χ_env_enl = env_enl.basis_size
     sys_enl_op = sys_enl.operator_dict
     env_enl_op = env_enl.operator_dict
-    superblock_hamiltonian = kron(sys_enl_op[:H], speye(m_env_enl)) + kron(speye(m_sys_enl), env_enl_op[:H]) +
+    superblock_hamiltonian = kron(sys_enl_op[:H], speye(χ_env_enl)) + kron(speye(χ_sys_enl), env_enl_op[:H]) +
                              H2(sys_enl_op[:conn_Sz], sys_enl_op[:conn_Sp], env_enl_op[:conn_Sz], env_enl_op[:conn_Sp])
 
     # Call ARPACK to find the superblock ground state.  (:SR means find the
@@ -120,19 +120,17 @@ function single_dmrg_step(sys::Block, env::Block, m::Int)
     psi0 = transpose(reshape(psi0, (env_enl.basis_size, sys_enl.basis_size)))
     rho = Hermitian(psi0 * psi0')
 
-    # Diagonalize the reduced density matrix and sort the eigenvectors by
-    # eigenvalue.
+    # Diagonalize the reduced density matrix, giving sorted eigenvalues
     fact = eigfact(rho)
     evals, evecs = fact[:values], fact[:vectors]
-    permutation = sortperm(evals, rev=true)
 
-    # Build the transformation matrix from the `m` overall most significant
+    # Build the transformation matrix from the `χ` overall most significant
     # eigenvectors.
-    my_m = min(length(evals), m)
-    indices = permutation[1:my_m]
-    transformation_matrix = evecs[:, indices]
+    χ = min(length(evals), χmax)
+    keptinds = length(evals):-1:length(evals)-χ+1
+    transformation_matrix = evecs[:, keptinds]
 
-    truncation_error = 1 - sum(evals[indices])
+    truncation_error = 1 - sum(evals[keptinds])
     println("truncation error: ", truncation_error)
 
     # Rotate and truncate each operator.
@@ -141,7 +139,7 @@ function single_dmrg_step(sys::Block, env::Block, m::Int)
         new_operator_dict[name] = rotate_and_truncate(op, transformation_matrix)
     end
 
-    newblock = Block(sys_enl.length, my_m, new_operator_dict)
+    newblock = Block(sys_enl.length, χ, new_operator_dict)
 
     return newblock, energy
 end
