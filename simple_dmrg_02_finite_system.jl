@@ -8,6 +8,8 @@
 # Open source under the MIT license.  Source code at
 # <https://github.com/simple-dmrg/simple-dmrg/>
 
+kronr(args...) = length(args)==1 ? args[1] : kron(reverse(args)...)
+
 # Data structures to represent the block and enlarged block objects.
 immutable Block
     length::Int
@@ -34,7 +36,7 @@ function H2(Sz1, Sp1, Sz2, Sp2)  # two-site part of H
     # corresponding two-site term in the Hamiltonian that joins the two sites.
     const J = 1.0
     const Jz = 1.0
-    return (J / 2) * (kron(Sp1, Sp2') + kron(Sp1', Sp2)) + Jz * kron(Sz1, Sz2)
+    return (J / 2) * (kronr(Sp1, Sp2') + kronr(Sp1', Sp2)) + Jz * kronr(Sz1, Sz2)
 end
 
 # conn refers to the connection operator, that is, the operator on the edge of
@@ -58,9 +60,9 @@ function enlarge_block(block::Block)
     # array scaled by the first.  As such, we adopt this convention for
     # Kronecker products throughout the code.
     enlarged_operator_dict = Dict{Symbol,AbstractMatrix{Float64}}(
-        :H => kron(o[:H], speye(model_d)) + kron(speye(mblock), H1) + H2(o[:conn_Sz], o[:conn_Sp], Sz1, Sp1),
-        :conn_Sz => kron(speye(mblock), Sz1),
-        :conn_Sp => kron(speye(mblock), Sp1),
+        :H => kronr(o[:H], speye(model_d)) + kronr(speye(mblock), H1) + H2(o[:conn_Sz], o[:conn_Sp], Sz1, Sp1),
+        :conn_Sz => kronr(speye(mblock), Sz1),
+        :conn_Sp => kronr(speye(mblock), Sp1),
     )
 
     return Block(block.length + 1,
@@ -97,7 +99,7 @@ function single_dmrg_step(sys::Block, env::Block, χmax::Int)
     χ_env_enl = env_enl.basis_size
     sys_enl_op = sys_enl.operator_dict
     env_enl_op = env_enl.operator_dict
-    superblock_hamiltonian = kron(sys_enl_op[:H], speye(χ_env_enl)) + kron(speye(χ_sys_enl), env_enl_op[:H]) +
+    superblock_hamiltonian = kronr(sys_enl_op[:H], speye(χ_env_enl)) + kronr(speye(χ_sys_enl), env_enl_op[:H]) +
                              H2(sys_enl_op[:conn_Sz], sys_enl_op[:conn_Sp], env_enl_op[:conn_Sz], env_enl_op[:conn_Sp])
 
     # Call ARPACK to find the superblock ground state.  (:SR means find the
@@ -117,7 +119,7 @@ function single_dmrg_step(sys::Block, env::Block, χmax::Int)
     # quickly in our Kronecker product structure, psi0 is thus row-major.
     # However, Julia stores matrices in column-major format, so we first
     # construct our matrix in (env, sys) form and then take the transpose.
-    psi0 = transpose(reshape(psi0, (env_enl.basis_size, sys_enl.basis_size)))
+    psi0 = reshape(psi0, (sys_enl.basis_size, env_enl.basis_size))
     rho = Hermitian(psi0 * psi0')
 
     # Diagonalize the reduced density matrix, giving sorted eigenvalues
