@@ -15,15 +15,9 @@ immutable Block
     operator_dict::Dict{Symbol,AbstractMatrix{Float64}}
 end
 
-immutable EnlargedBlock
-    length::Int
-    basis_size::Int
-    operator_dict::Dict{Symbol,AbstractMatrix{Float64}}
-end
-
 # For these objects to be valid, the basis size must match the dimension of
 # each operator matrix.
-isvalid(block::Union{Block,EnlargedBlock}) =
+isvalid(block::Block) =
     all(op -> size(op) == (block.basis_size, block.basis_size), values(block.operator_dict))
 
 # Model-specific code for the Heisenberg XXZ chain
@@ -69,7 +63,7 @@ function enlarge_block(block::Block)
         :conn_Sp => kron(speye(mblock), Sp1),
     )
 
-    return EnlargedBlock(block.length + 1,
+    return Block(block.length + 1,
                          block.basis_size * model_d,
                          enlarged_operator_dict)
 end
