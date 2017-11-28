@@ -120,19 +120,16 @@ function single_dmrg_step(sys::Block, env::Block, χmax::Int)
     # However, Julia stores matrices in column-major format, so we first
     # construct our matrix in (env, sys) form and then take the transpose.
     psi0 = reshape(psi0, (sys_enl.basis_size, env_enl.basis_size))
-    rho = Hermitian(psi0 * psi0')
-
-    # Diagonalize the reduced density matrix, giving sorted eigenvalues
-    fact = eigfact(rho)
-    evals, evecs = fact[:values], fact[:vectors]
+    U, s, Vd = svd(psi0)
+    V = Vd'
 
     # Build the transformation matrix from the `χ` overall most significant
     # eigenvectors.
-    χ = min(length(evals), χmax)
-    keptinds = length(evals):-1:length(evals)-χ+1
-    transformation_matrix = evecs[:, keptinds]
+    χ = min(length(s), χmax)
+    keptinds = 1:χ
+    transformation_matrix = U[:, keptinds]
 
-    truncation_error = 1 - sum(evals[keptinds])
+    truncation_error = 1 - vecnorm(s[keptinds])^2
     println("truncation error: ", truncation_error)
 
     # Rotate and truncate each operator.
