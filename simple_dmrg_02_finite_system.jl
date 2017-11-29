@@ -29,7 +29,6 @@ Sz1 = [0.5 0.0; 0.0 -0.5]  # single-site S^z
 Sp1 = [0.0 1.0; 0.0 0.0]  # single-site S^+
 
 H1 = [0.0 0.0; 0.0 0.0]  # single-site portion of H is zero
-cnt = 0
 function H2(Sz1, Sp1, Sz2, Sp2)  # two-site part of H
     # Given the operators S^z and S^+ on two sites in different Hilbert spaces
     # (e.g. two blocks), returns a Kronecker product representing the
@@ -37,12 +36,6 @@ function H2(Sz1, Sp1, Sz2, Sp2)  # two-site part of H
     const J = 1.0
     const Jz = 1.0
     ans = (J / 2) * (kronr(Sp1, Sp2') + kronr(Sp1', Sp2)) + Jz * kronr(Sz1, Sz2)
-    display(ans)
-    println()
-    global cnt += 1
-    if cnt > 5
-        @assert false
-    end
     return ans
 end
 
@@ -108,6 +101,12 @@ function single_dmrg_step(sys::Block, env::Block, χmax::Int)
     env_enl_op = env_enl.operator_dict
     superblock_hamiltonian = kronr(sys_enl_op[:H], speye(χ_env_enl)) + kronr(speye(χ_sys_enl), env_enl_op[:H]) +
                              H2(sys_enl_op[:conn_Sz], sys_enl_op[:conn_Sp], env_enl_op[:conn_Sz], env_enl_op[:conn_Sp])
+
+    println("blockLA[:H]")
+    display(sys_enl_op[:H])
+    println("blockRB[:H]")
+    display(env_enl_op[:H])
+    println()
 
     # Call ARPACK to find the superblock ground state.  (:SR means find the
     # eigenvalue with the "smallest real" value.)
