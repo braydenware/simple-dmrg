@@ -32,7 +32,6 @@ Base.similar(b::Block) = Block(b.L, b.χ)
 
 Base.setindex!(b::Block, v::AbstractMatrix{Float64}, s::Symbol) = b.opdict[s]=v
 
-
 """
 Checks dimensions of block operators
 """
@@ -57,14 +56,13 @@ end
 HeisenbergXXZ(J::Float64, Jz::Float64) = NNHam(2, :Z, 0., [:Z, :P, :M], [:Z, :M, :P], [Jz, J/2, J/2], 
                                                Dict(:Z=>σᶻ, :P=>σ⁺, :M=>σ⁺'))
 
-cnt = 0
 function H2(H::NNHam, leftopdict::Dict{Symbol, AbstractMatrix{Float64}}, rightopdict::Dict{Symbol, AbstractMatrix{Float64}})
     ans = sum(c*kronr(leftopdict[Hl],rightopdict[Hr]) for (Hl, Hr, c) in zip(H.H2left, H.H2right, H.H2coeff))
     return ans
 end
+H2(H::NNHam) = H2(H, H.opdict, H.opdict)
 
 H1(H::NNHam, opdict::Dict{Symbol, AbstractMatrix{Float64}}) = H.H1coeff*opdict[H.H1]
-
 H1(H::NNHam) = H1(H, H.opdict)
 
 function initial_block(H::NNHam)
@@ -96,24 +94,47 @@ function enlarge_block(H::NNHam, block::Block)
     return enlarged_block
 end
 
-function project(operator::AbstractMatrix{Float64}, transformation_matrix::AbstractMatrix{Float64})
-    # Transforms the operator to the new (possibly truncated) basis given by
-    # `transformation_matrix`.
-    return transformation_matrix' * (operator * transformation_matrix)
+function project(operator::AbstractMatrix{Float64}, basis::AbstractMatrix{Float64})
+    return basis' * (operator * basis)
 end
 
-function project(block::Block, transformation_matrix::AbstractMatrix{Float64})
-    newblock = Block(block.L, size(transformation_matrix, 2))
+function project(block::Block, basis::AbstractMatrix{Float64})
+    newblock = Block(block.L, size(basis, 2))
     for (sym, op) in block
-        newblock[sym] = project(op, transformation_matrix)
+        newblock[sym] = project(op, basis)
     end
     return newblock
 end
 
-function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
-    # Performs a single DMRG step using `left` as the system and `right` as the
-    # environment, keeping a maximum of `χmax` states in the new basis.
+function truncatesvd(U, s, V; kwargs...)
+    kwargs = Dict(kwargs)
 
+    χ = length(s)
+    if :smin in keys(kwargs)
+        while s[χ]<kwargs[:smin] && χ>1
+            χ -= 1
+        end
+    elseif :tol in keys(kwargs)
+        while vecnorm(s[χ+1:end])^2<kwargs[:tol] && χ>1
+            χ -= 1
+        end 
+    end
+
+    if :χmax in keys(kwargs)
+        χ = min(χ, kwargs[:χmax])
+    end
+
+    U = U[:, 1:χ]
+    s = s[1:χ]
+    V = V[1:χ, :]
+    return χ, U, s, V
+end
+
+"""
+Performs a single DMRG step using `left` as the system and `right` as the
+environment, keeping a maximum of `χmax` states in the new basis.
+"""
+function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block; kwargs...)
     @assert isvalid(blockL)
     @assert isvalid(blockR)
 
@@ -148,10 +169,7 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
     V = Vd'
 
     # Truncate using the `χ` overall most significant eigenvectors.
-    χ = min(length(s), χmax)
-    U = U[:, 1:χ]
-    s = s[1:χ]
-    V = V[1:χ, :]
+    χ, U, s, V = truncatesvd(U, s, V; kwargs...)
     sV = Diagonal(s)*V
 
     tensorA = reshape(U, blockL.χ, H.p, χ)
@@ -180,18 +198,18 @@ function graphic(sys_block::Block, env_block::Block, sys_label::Symbol=:l)
     return str
 end
 
-function infinite_system_algorithm(H::NNHam, L::Int, m::Int)
+function infinite_system_algorithm(H::NNHam, L::Int, χ::Int)
     block = initial_block
     # Repeatedly enlarge the system by performing a single DMRG step, using a
     # reflection of the current block as the environment.
     while 2 * block.L < L
         println("L = ", block.L * 2 + 2)
-        block, energy = single_dmrg_step(H, block, block, m)
+        block, energy = single_dmrg_step(H, block, block; χmax=χ)
         println("E/L = ", energy / (block.L * 2))
     end
 end
 
-function finite_system_algorithm(H::NNHam, L::Int, m_warmup::Int, m_sweep_list::AbstractVector{Int})
+function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::AbstractVector{Int})
     @assert iseven(L)
 
     # To keep things simple, this dictionary is not actually saved to disk, but
@@ -209,7 +227,7 @@ function finite_system_algorithm(H::NNHam, L::Int, m_warmup::Int, m_sweep_list::
     while 2 * block.L < L
         # Perform a single DMRG step and save the new Block to "disk"
         println(graphic(block, block))
-        block, energy = single_dmrg_step(H, block, block, m_warmup)
+        block, energy = single_dmrg_step(H, block, block; χmax = χ_inf)
         println("E/L = ", energy / (block.L * 2))
         block_disk[:l, block.L] = block
         block_disk[:r, block.L] = block
@@ -225,7 +243,7 @@ function finite_system_algorithm(H::NNHam, L::Int, m_warmup::Int, m_sweep_list::
     sys_block = block
     block = Block(0, 0)
 
-    for m in m_sweep_list
+    for χ in χ_sweep
         while true
             # Load the appropriate environment block from "disk"
             env_block = block_disk[env_label, L - sys_block.L - 2]
@@ -237,7 +255,7 @@ function finite_system_algorithm(H::NNHam, L::Int, m_warmup::Int, m_sweep_list::
 
             # Perform a single DMRG step.
             println(graphic(sys_block, env_block, sys_label))
-            sys_block, energy = single_dmrg_step(H, sys_block, env_block, m)
+            sys_block, energy = single_dmrg_step(H, sys_block, env_block; χmax=χ)
 
             println("E/L = ", energy / L)
 
