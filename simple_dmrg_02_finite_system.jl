@@ -36,7 +36,14 @@ function H2(Sz1, Sp1, Sz2, Sp2)  # two-site part of H
     # corresponding two-site term in the Hamiltonian that joins the two sites.
     const J = 1.0
     const Jz = 1.0
-    return (J / 2) * (kronr(Sp1, Sp2') + kronr(Sp1', Sp2)) + Jz * kronr(Sz1, Sz2)
+    @show Sz1
+    @show Sp1
+    @show Sz2
+    @show Sp2
+    ans = (J / 2) * (kronr(Sp1, Sp2') + kronr(Sp1', Sp2)) + Jz * kronr(Sz1, Sz2)
+    @show ans
+    @assert false
+    return ans
 end
 
 # conn refers to the connection operator, that is, the operator on the edge of
