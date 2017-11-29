@@ -8,6 +8,9 @@
 # Open source under the MIT license.  Source code at
 # <https://github.com/simple-dmrg/simple-dmrg/>
 
+# Extended by Brayden Ware for learning purposes
+# Do not distribute
+
 kronr(args...) = length(args)==1 ? args[1] : kron(reverse(args)...)
 
 # Data structures to represent the block and enlarged block objects.
@@ -126,12 +129,9 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
     @assert isvalid(blockRB)
 
     # Construct the full superblock Hamiltonian.
-    pA = 2
-    pB = 2
-    χL = blockL.χ
-    χR = blockR.χ
-    @assert blockLA.χ == χL*pA
-    @assert blockRB.χ == χR*pB
+    @assert blockLA.χ == blockL.χ*H.p
+    @assert blockRB.χ == blockR.χ*H.p
+
     superblock_hamiltonian = kronr(blockLA[:H], speye(blockRB.χ)) + kronr(speye(blockLA.χ), blockRB[:H]) + H2(H, blockLA.opdict, blockRB.opdict)
     # Call ARPACK to find the superblock ground state.  (:SR means find the
     # eigenvalue with the "smallest real" value.)
@@ -145,20 +145,22 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
     # environment
     psi0 = reshape(psi0, (blockLA.χ, blockRB.χ))
     U, s, Vd = svd(psi0)
-    
+    V = Vd'
+
+    # Truncate using the `χ` overall most significant eigenvectors.
     χ = min(length(s), χmax)
+    U = U[:, 1:χ]
+    s = s[1:χ]
+    V = V[1:χ, :]
+    sV = Diagonal(s)*V
 
-    # LAtensor = reshape(U, χL, pA, χ)
-    # RBtensor = reshape(Diagonal(s)*Vd', χ, χR, pB)
+    tensorA = reshape(U, blockL.χ, H.p, χ)
+    tensorB = permutedims(reshape(sV, χ, blockR.χ, H.p), (1, 3, 2))
 
-    # Build the transformation matrix from the `χ` overall most significant
-    # eigenvectors.
-    transformation_matrix = U[:, 1:χ]
     # Rotate and truncate each operator.
-    newblockLA = project(blockLA, transformation_matrix)
-    
+    newblockLA = project(blockLA, U)
 
-    truncation_error = 1 - vecnorm(s[1:χ])^2
+    truncation_error = 1 - vecnorm(s)^2
     println("truncation error: ", truncation_error)
     return newblockLA, energy
 end
