@@ -29,20 +29,20 @@ Sz1 = [0.5 0.0; 0.0 -0.5]  # single-site S^z
 Sp1 = [0.0 1.0; 0.0 0.0]  # single-site S^+
 
 H1 = [0.0 0.0; 0.0 0.0]  # single-site portion of H is zero
-
+cnt = 0
 function H2(Sz1, Sp1, Sz2, Sp2)  # two-site part of H
     # Given the operators S^z and S^+ on two sites in different Hilbert spaces
     # (e.g. two blocks), returns a Kronecker product representing the
     # corresponding two-site term in the Hamiltonian that joins the two sites.
     const J = 1.0
     const Jz = 1.0
-    @show Sz1
-    @show Sp1
-    @show Sz2
-    @show Sp2
     ans = (J / 2) * (kronr(Sp1, Sp2') + kronr(Sp1', Sp2)) + Jz * kronr(Sz1, Sz2)
-    @show ans
-    @assert false
+    display(ans)
+    println()
+    global cnt += 1
+    if cnt > 5
+        @assert false
+    end
     return ans
 end
 
