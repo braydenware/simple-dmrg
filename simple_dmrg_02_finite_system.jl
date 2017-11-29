@@ -146,9 +146,10 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
     # Hermitian but won't be detected as such due to small roundoff error.)
     superblock_hamiltonian = (superblock_hamiltonian + superblock_hamiltonian') / 2
     display(superblock_hamiltonian)
-    @assert false
+    println()
     (energy,), psi0 = eigs(superblock_hamiltonian, nev=1, which=:SR)
-
+    @show energy
+    @assert false
     # Construct the reduced density matrix of the system by tracing out the
     # environment
     psi0 = reshape(psi0, (blockLA.χ, blockRB.χ))
