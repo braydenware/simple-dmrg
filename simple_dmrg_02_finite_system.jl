@@ -57,12 +57,6 @@ HeisenbergXXZ(J::Float64, Jz::Float64) = NNHam(2, :Z, 0., [:Z, :P, :M], [:Z, :M,
 cnt = 0
 function H2(H::NNHam, leftopdict::Dict{Symbol, AbstractMatrix{Float64}}, rightopdict::Dict{Symbol, AbstractMatrix{Float64}})
     ans = sum(c*kronr(leftopdict[Hl],rightopdict[Hr]) for (Hl, Hr, c) in zip(H.H2left, H.H2right, H.H2coeff))
-    display(ans)
-    println()
-    global cnt += 1
-    if cnt > 5
-        @assert false
-    end
     return ans
 end
 
@@ -87,13 +81,15 @@ Kronecker products throughout the code.
 """
 function enlarge_block(H::NNHam, block::Block)
     enlarged_block = Block(block.L+1, block.χ * H.p)
+    for (sym, op) in H.opdict
+        enlarged_block[sym] = kronr(speye(block.χ), op)
+    end
+
     hL =  kronr(block[:H], speye(H.p))
     hA = kronr(speye(block.χ), H1(H))
     hLA = H2(H, block.opdict, H.opdict)
     enlarged_block[:H] = hL + hA + hLA
-    for (sym, op) in H.opdict
-        enlarged_block[sym] = kronr(speye(block.χ), op)
-    end
+
     return enlarged_block
 end
 
@@ -137,11 +133,6 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
     @assert blockLA.χ == χL*pA
     @assert blockRB.χ == χR*pB
     superblock_hamiltonian = kronr(blockLA[:H], speye(blockRB.χ)) + kronr(speye(blockLA.χ), blockRB[:H]) + H2(H, blockLA.opdict, blockRB.opdict)
-    println("blockLA[:H]")
-    display(blockLA[:H])
-    println("blockRB[:H]")
-    display(blockRB[:H])
-    println()
     # Call ARPACK to find the superblock ground state.  (:SR means find the
     # eigenvalue with the "smallest real" value.)
     #
@@ -149,11 +140,7 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
     # Hermitian by `eigs`.  (Without this step, the matrix is effectively
     # Hermitian but won't be detected as such due to small roundoff error.)
     superblock_hamiltonian = (superblock_hamiltonian + superblock_hamiltonian') / 2
-    display(superblock_hamiltonian)
-    println()
     (energy,), psi0 = eigs(superblock_hamiltonian, nev=1, which=:SR)
-    @show energy
-    @assert false
     # Construct the reduced density matrix of the system by tracing out the
     # environment
     psi0 = reshape(psi0, (blockLA.χ, blockRB.χ))
