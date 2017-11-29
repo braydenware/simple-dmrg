@@ -51,10 +51,19 @@ end
 σᶻ = [0.5 0.0; 0.0 -0.5]  # single-site S^z
 σ⁺ = [0.0 1.0; 0.0 0.0]  # single-site S^+
 
-HeisenbergXXZ(J::Float64, Jz::Float64) = NNHam(2, :Z, 0., [:Z, :P, :M], [:Z, :M, :P], [J/2, J/2, Jz], 
+HeisenbergXXZ(J::Float64, Jz::Float64) = NNHam(2, :Z, 0., [:Z, :P, :M], [:Z, :M, :P], [Jz, J/2, J/2], 
                                                Dict(:Z=>σᶻ, :P=>σ⁺, :M=>σ⁺'))
+
+cnt = 0
 function H2(H::NNHam, leftopdict::Dict{Symbol, AbstractMatrix{Float64}}, rightopdict::Dict{Symbol, AbstractMatrix{Float64}})
-    return sum(c*kronr(leftopdict[Hl],rightopdict[Hr]) for (Hl, Hr, c) in zip(H.H2left, H.H2right, H.H2coeff))
+    ans = sum(c*kronr(leftopdict[Hl],rightopdict[Hr]) for (Hl, Hr, c) in zip(H.H2left, H.H2right, H.H2coeff))
+    display(ans)
+    println()
+    global cnt += 1
+    if cnt > 5
+        @assert false
+    end
+    return ans
 end
 
 H1(H::NNHam, opdict::Dict{Symbol, AbstractMatrix{Float64}}) = H.H1coeff*opdict[H.H1]
