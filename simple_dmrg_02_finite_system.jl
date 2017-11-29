@@ -137,7 +137,11 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
     @assert blockLA.χ == χL*pA
     @assert blockRB.χ == χR*pB
     superblock_hamiltonian = kronr(blockLA[:H], speye(blockRB.χ)) + kronr(speye(blockLA.χ), blockRB[:H]) + H2(H, blockLA.opdict, blockRB.opdict)
-
+    println("blockLA[:H]")
+    display(blockLA[:H])
+    println("blockRB[:H]")
+    display(blockRB[:H])
+    println()
     # Call ARPACK to find the superblock ground state.  (:SR means find the
     # eigenvalue with the "smallest real" value.)
     #
