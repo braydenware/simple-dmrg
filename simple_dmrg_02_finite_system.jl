@@ -11,96 +11,123 @@
 kronr(args...) = length(args)==1 ? args[1] : kron(reverse(args)...)
 
 # Data structures to represent the block and enlarged block objects.
-immutable Block
-    length::Int
-    basis_size::Int
-    operator_dict::Dict{Symbol,AbstractMatrix{Float64}}
+immutable Block <: Associative{Symbol, AbstractMatrix{Float64}}
+    L::Int
+    χ::Int
+    opdict::Dict{Symbol,AbstractMatrix{Float64}}
+end
+Block(L::Int, χ::Int) = Block(L, χ, Dict{Symbol, AbstractMatrix{Float64}}())
+# Associative interface
+Base.start(b::Block) = start(b.opdict)
+Base.next(b::Block, state) = next(b.opdict, state)
+Base.done(b::Block, state) = done(b.opdict, state)
+Base.length(b::Block) = length(b.opdict)
+Base.show(b::Block) = show(STDOUT, b)
+Base.get(b::Block, s::Symbol, default) = get(b.opdict, s, default)
+Base.similar(b::Block) = Block(b.L, b.χ)
+# Free methods: keys, values, push!, merge!, in, haskey, getindex, filter, copy, ==, convert(::Dict{Symbol, AbstractMatrix{Float64}}, )
+
+Base.setindex!(b::Block, v::AbstractMatrix{Float64}, s::Symbol) = b.opdict[s]=v
+
+
+"""
+Checks dimensions of block operators
+"""
+isvalid(block::Block) = all(op -> size(op) == (block.χ, block.χ), values(block))
+
+struct NNHam
+    p::Int
+
+    H1::Symbol
+    H1coeff::Float64
+    
+    H2left::Vector{Symbol}
+    H2right::Vector{Symbol}
+    H2coeff::Vector{Float64}
+    
+    opdict::Dict{Symbol, AbstractMatrix{Float64}}
 end
 
-# For these objects to be valid, the basis size must match the dimension of
-# each operator matrix.
-isvalid(block::Block) =
-    all(op -> size(op) == (block.basis_size, block.basis_size), values(block.operator_dict))
+σᶻ = [0.5 0.0; 0.0 -0.5]  # single-site S^z
+σ⁺ = [0.0 1.0; 0.0 0.0]  # single-site S^+
 
-# Model-specific code for the Heisenberg XXZ chain
-model_d = 2  # single-site basis size
-
-Sz1 = [0.5 0.0; 0.0 -0.5]  # single-site S^z
-Sp1 = [0.0 1.0; 0.0 0.0]  # single-site S^+
-
-H1 = [0.0 0.0; 0.0 0.0]  # single-site portion of H is zero
-
-function H2(Sz1, Sp1, Sz2, Sp2)  # two-site part of H
-    # Given the operators S^z and S^+ on two sites in different Hilbert spaces
-    # (e.g. two blocks), returns a Kronecker product representing the
-    # corresponding two-site term in the Hamiltonian that joins the two sites.
-    const J = 1.0
-    const Jz = 1.0
-    return (J / 2) * (kronr(Sp1, Sp2') + kronr(Sp1', Sp2)) + Jz * kronr(Sz1, Sz2)
+HeisenbergXXZ(J::Float64, Jz::Float64) = NNHam(2, :Z, 0., [:Z, :P, :M], [:Z, :M, :P], [J/2, J/2, Jz], 
+                                               Dict(:Z=>σᶻ, :P=>σ⁺, :M=>σ⁺'))
+function H2(H::NNHam, leftopdict::Dict{Symbol, AbstractMatrix{Float64}}, rightopdict::Dict{Symbol, AbstractMatrix{Float64}})
+    return sum(c*kronr(leftopdict[Hl],rightopdict[Hr]) for (Hl, Hr, c) in zip(H.H2left, H.H2right, H.H2coeff))
 end
 
-# conn refers to the connection operator, that is, the operator on the edge of
-# the block, on the interior of the chain.  We need to be able to represent S^z
-# and S^+ on that site in the current basis in order to grow the chain.
-initial_block = Block(1, model_d, Dict{Symbol,AbstractMatrix{Float64}}(
-    :H => H1,
-    :conn_Sz => Sz1,
-    :conn_Sp => Sp1,
-))
+H1(H::NNHam, opdict::Dict{Symbol, AbstractMatrix{Float64}}) = H.H1coeff*opdict[H.H1]
 
-function enlarge_block(block::Block)
-    # This function enlarges the provided Block by a single site, returning an
-    # EnlargedBlock.
-    mblock = block.basis_size
-    o = block.operator_dict
+H1(H::NNHam) = H1(H, H.opdict)
 
-    # Create the new operators for the enlarged block.  Our basis becomes a
-    # Kronecker product of the Block basis and the single-site basis.  NOTE:
-    # `kron` uses the tensor product convention making blocks of the second
-    # array scaled by the first.  As such, we adopt this convention for
-    # Kronecker products throughout the code.
-    enlarged_operator_dict = Dict{Symbol,AbstractMatrix{Float64}}(
-        :H => kronr(o[:H], speye(model_d)) + kronr(speye(mblock), H1) + H2(o[:conn_Sz], o[:conn_Sp], Sz1, Sp1),
-        :conn_Sz => kronr(speye(mblock), Sz1),
-        :conn_Sp => kronr(speye(mblock), Sp1),
-    )
-
-    return Block(block.length + 1,
-                         block.basis_size * model_d,
-                         enlarged_operator_dict)
+function initial_block(H::NNHam)
+    block = Block(1, H.p, H.opdict) # block knows how to connnect left or right using H2left or H2right symbols
+    block[:H] = H1(H)
+    return block
 end
 
-function rotate_and_truncate(operator, transformation_matrix)
+"""
+This function enlarges the provided Block by a single site.
+
+Create the new operators for the enlarged block.  Our basis becomes a
+Kronecker product of the Block basis and the single-site basis.  NOTE:
+`kronr` uses the tensor product convention making blocks of the first
+array scaled by the second.  As such, we adopt this convention for
+Kronecker products throughout the code.
+"""
+function enlarge_block(H::NNHam, block::Block)
+    enlarged_block = Block(block.L+1, block.χ * H.p)
+    hL =  kronr(block[:H], speye(H.p))
+    hA = kronr(speye(block.χ), H1(H))
+    hLA = H2(H, block.opdict, H.opdict)
+    enlarged_block[:H] = hL + hA + hLA
+    for (sym, op) in H.opdict
+        enlarged_block[sym] = kronr(speye(block.χ), op)
+    end
+    return enlarged_block
+end
+
+function project(operator::AbstractMatrix{Float64}, transformation_matrix::AbstractMatrix{Float64})
     # Transforms the operator to the new (possibly truncated) basis given by
     # `transformation_matrix`.
     return transformation_matrix' * (operator * transformation_matrix)
 end
 
-function single_dmrg_step(sys::Block, env::Block, χmax::Int)
-    # Performs a single DMRG step using `sys` as the system and `env` as the
+function project(block::Block, transformation_matrix::AbstractMatrix{Float64})
+    newblock = Block(block.L, size(transformation_matrix, 2))
+    for (sym, op) in block
+        newblock[sym] = project(op, transformation_matrix)
+    end
+    return newblock
+end
+
+function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block, χmax::Int)
+    # Performs a single DMRG step using `left` as the system and `right` as the
     # environment, keeping a maximum of `χmax` states in the new basis.
 
-    @assert isvalid(sys)
-    @assert isvalid(env)
+    @assert isvalid(blockL)
+    @assert isvalid(blockR)
 
     # Enlarge each block by a single site.
-    sys_enl = enlarge_block(sys)
-    if sys === env  # no need to recalculate a second time
-        env_enl = sys_enl
+    blockLA = enlarge_block(H, blockL)
+    if blockL === blockR  # no need to recalculate a second time
+        blockRB = blockLA
     else
-        env_enl = enlarge_block(env)
+        blockRB = enlarge_block(H, blockR)
     end
 
-    @assert isvalid(sys_enl)
-    @assert isvalid(env_enl)
+    @assert isvalid(blockLA)
+    @assert isvalid(blockRB)
 
     # Construct the full superblock Hamiltonian.
-    χ_sys_enl = sys_enl.basis_size
-    χ_env_enl = env_enl.basis_size
-    sys_enl_op = sys_enl.operator_dict
-    env_enl_op = env_enl.operator_dict
-    superblock_hamiltonian = kronr(sys_enl_op[:H], speye(χ_env_enl)) + kronr(speye(χ_sys_enl), env_enl_op[:H]) +
-                             H2(sys_enl_op[:conn_Sz], sys_enl_op[:conn_Sp], env_enl_op[:conn_Sz], env_enl_op[:conn_Sp])
+    pA = 2
+    pB = 2
+    χL = blockL.χ
+    χR = blockR.χ
+    @assert blockLA.χ == χL*pA
+    @assert blockRB.χ == χR*pB
+    superblock_hamiltonian = kronr(blockLA[:H], speye(blockRB.χ)) + kronr(speye(blockLA.χ), blockRB[:H]) + H2(H, blockLA.opdict, blockRB.opdict)
 
     # Call ARPACK to find the superblock ground state.  (:SR means find the
     # eigenvalue with the "smallest real" value.)
@@ -113,41 +140,31 @@ function single_dmrg_step(sys::Block, env::Block, χmax::Int)
 
     # Construct the reduced density matrix of the system by tracing out the
     # environment
-    #
-    # We want to make the (sys, env) indices correspond to (row, column) of a
-    # matrix, respectively.  Since the environment (column) index updates most
-    # quickly in our Kronecker product structure, psi0 is thus row-major.
-    # However, Julia stores matrices in column-major format, so we first
-    # construct our matrix in (env, sys) form and then take the transpose.
-    psi0 = reshape(psi0, (sys_enl.basis_size, env_enl.basis_size))
+    psi0 = reshape(psi0, (blockLA.χ, blockRB.χ))
     U, s, Vd = svd(psi0)
-    V = Vd'
+    
+    χ = min(length(s), χmax)
+
+    # LAtensor = reshape(U, χL, pA, χ)
+    # RBtensor = reshape(Diagonal(s)*Vd', χ, χR, pB)
 
     # Build the transformation matrix from the `χ` overall most significant
     # eigenvectors.
-    χ = min(length(s), χmax)
-    keptinds = 1:χ
-    transformation_matrix = U[:, keptinds]
-
-    truncation_error = 1 - vecnorm(s[keptinds])^2
-    println("truncation error: ", truncation_error)
-
+    transformation_matrix = U[:, 1:χ]
     # Rotate and truncate each operator.
-    new_operator_dict = Dict{Symbol,AbstractMatrix{Float64}}()
-    for (name, op) in sys_enl.operator_dict
-        new_operator_dict[name] = rotate_and_truncate(op, transformation_matrix)
-    end
+    newblockLA = project(blockLA, transformation_matrix)
+    
 
-    newblock = Block(sys_enl.length, χ, new_operator_dict)
-
-    return newblock, energy
+    truncation_error = 1 - vecnorm(s[1:χ])^2
+    println("truncation error: ", truncation_error)
+    return newblockLA, energy
 end
 
 function graphic(sys_block::Block, env_block::Block, sys_label::Symbol=:l)
     # Returns a graphical representation of the DMRG step we are about to
     # perform, using '=' to represent the system sites, '-' to represent the
     # environment sites, and '**' to represent the two intermediate sites.
-    str = repeat("=", sys_block.length) * "**" * repeat("-", env_block.length)
+    str = repeat("=", sys_block.L) * "**" * repeat("-", env_block.L)
     if sys_label == :r
         # The system should be on the right and the environment should be on
         # the left, so reverse the graphic.
@@ -158,38 +175,39 @@ function graphic(sys_block::Block, env_block::Block, sys_label::Symbol=:l)
     return str
 end
 
-function infinite_system_algorithm(L::Int, m::Int)
+function infinite_system_algorithm(H::NNHam, L::Int, m::Int)
     block = initial_block
     # Repeatedly enlarge the system by performing a single DMRG step, using a
     # reflection of the current block as the environment.
-    while 2 * block.length < L
-        println("L = ", block.length * 2 + 2)
-        block, energy = single_dmrg_step(block, block, m)
-        println("E/L = ", energy / (block.length * 2))
+    while 2 * block.L < L
+        println("L = ", block.L * 2 + 2)
+        block, energy = single_dmrg_step(H, block, block, m)
+        println("E/L = ", energy / (block.L * 2))
     end
 end
 
-function finite_system_algorithm(L::Int, m_warmup::Int, m_sweep_list::AbstractVector{Int})
+function finite_system_algorithm(H::NNHam, L::Int, m_warmup::Int, m_sweep_list::AbstractVector{Int})
     @assert iseven(L)
 
     # To keep things simple, this dictionary is not actually saved to disk, but
     # we use it to represent persistent storage.
     block_disk = Dict{Tuple{Symbol,Int},Block}()  # "disk" storage for Block objects
+    site_tensors_disk = Dict{Tuple{Symbol, Int}, Array{Float64, 3}}()
 
     # Use the infinite system algorithm to build up to desired size.  Each time
     # we construct a block, we save it for future reference as both a left
     # (:l) and right (:r) block, as the infinite system algorithm assumes the
     # environment is a mirror image of the system.
-    block = initial_block
-    block_disk[:l, block.length] = block
-    block_disk[:r, block.length] = block
-    while 2 * block.length < L
+    block = initial_block(H)
+    block_disk[:l, block.L] = block
+    block_disk[:r, block.L] = block
+    while 2 * block.L < L
         # Perform a single DMRG step and save the new Block to "disk"
         println(graphic(block, block))
-        block, energy = single_dmrg_step(block, block, m_warmup)
-        println("E/L = ", energy / (block.length * 2))
-        block_disk[:l, block.length] = block
-        block_disk[:r, block.length] = block
+        block, energy = single_dmrg_step(H, block, block, m_warmup)
+        println("E/L = ", energy / (block.L * 2))
+        block_disk[:l, block.L] = block
+        block_disk[:r, block.L] = block
     end
 
     # Now that the system is built up to its full size, we perform sweeps using
@@ -200,13 +218,13 @@ function finite_system_algorithm(L::Int, m_warmup::Int, m_sweep_list::AbstractVe
 
     # Rename block -> sys_block
     sys_block = block
-    block = Block(0, 0, Dict{Symbol,AbstractMatrix{Float64}}())
+    block = Block(0, 0)
 
     for m in m_sweep_list
         while true
             # Load the appropriate environment block from "disk"
-            env_block = block_disk[env_label, L - sys_block.length - 2]
-            if env_block.length == 1
+            env_block = block_disk[env_label, L - sys_block.L - 2]
+            if env_block.L == 1
                 # We've come to the end of the chain, so we reverse course.
                 sys_block, env_block = env_block, sys_block
                 sys_label, env_label = env_label, sys_label
@@ -214,15 +232,15 @@ function finite_system_algorithm(L::Int, m_warmup::Int, m_sweep_list::AbstractVe
 
             # Perform a single DMRG step.
             println(graphic(sys_block, env_block, sys_label))
-            sys_block, energy = single_dmrg_step(sys_block, env_block, m)
+            sys_block, energy = single_dmrg_step(H, sys_block, env_block, m)
 
             println("E/L = ", energy / L)
 
             # Save the block from this step to disk.
-            block_disk[sys_label, sys_block.length] = sys_block
+            block_disk[sys_label, sys_block.L] = sys_block
 
             # Check whether we just completed a full sweep.
-            if sys_label == :l && 2 * sys_block.length == L
+            if sys_label == :l && 2 * sys_block.L == L
                 break  # escape from the "while true" loop
             end
         end
@@ -230,4 +248,5 @@ function finite_system_algorithm(L::Int, m_warmup::Int, m_sweep_list::AbstractVe
 end
 
 #infinite_system_algorithm(100, 20)
-finite_system_algorithm(20, 10, [10, 20, 30, 40, 40])
+H = HeisenbergXXZ(1.0, 1.0)
+finite_system_algorithm(H, 20, 10, [10, 20, 30, 40, 40])
