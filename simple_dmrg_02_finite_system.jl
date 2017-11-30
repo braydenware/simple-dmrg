@@ -50,12 +50,6 @@ struct NNHam
     opdict::Dict{Symbol, AbstractMatrix{Float64}}
 end
 
-σᶻ = [0.5 0.0; 0.0 -0.5]  # single-site S^z
-σ⁺ = [0.0 1.0; 0.0 0.0]  # single-site S^+
-
-HeisenbergXXZ(J::Float64, Jz::Float64) = NNHam(2, :Z, 0., [:Z, :P, :M], [:Z, :M, :P], [Jz, J/2, J/2], 
-                                               Dict(:Z=>σᶻ, :P=>σ⁺, :M=>σ⁺'))
-
 function H2(H::NNHam, leftopdict::Dict{Symbol, AbstractMatrix{Float64}}, rightopdict::Dict{Symbol, AbstractMatrix{Float64}})
     ans = sum(c*kronr(leftopdict[Hl],rightopdict[Hr]) for (Hl, Hr, c) in zip(H.H2left, H.H2right, H.H2coeff))
     return ans
@@ -80,16 +74,30 @@ Kronecker product of the Block basis and the single-site basis.  NOTE:
 array scaled by the second.  As such, we adopt this convention for
 Kronecker products throughout the code.
 """
-function enlarge_block(H::NNHam, block::Block)
+function enlarge_block_right(block::Block, H::NNHam)
     enlarged_block = Block(block.L+1, block.χ * H.p)
     for (sym, op) in H.opdict
         enlarged_block[sym] = kronr(speye(block.χ), op)
     end
 
     hL =  kronr(block[:H], speye(H.p))
-    hA = kronr(speye(block.χ), H1(H))
     hLA = H2(H, block.opdict, H.opdict)
-    enlarged_block[:H] = hL + hA + hLA
+    hA = kronr(speye(block.χ), H1(H))
+    enlarged_block[:H] = hL + hLA + hA 
+
+    return enlarged_block
+end
+
+function enlarge_block_left(H::NNHam, block::Block)
+    enlarged_block = Block(block.L+1, block.χ * H.p)
+    for (sym, op) in H.opdict
+        enlarged_block[sym] = kronr(op, speye(block.χ))
+    end
+
+    hB = kronr(H1(H), speye(block.χ))
+    hBR = H2(H, H.opdict, block.opdict)
+    hR =  kronr(speye(H.p), block[:H])
+    enlarged_block[:H] = hB + hBR + hR
 
     return enlarged_block
 end
@@ -139,32 +147,30 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block; kwargs...)
     @assert isvalid(blockR)
 
     # Enlarge each block by a single site.
-    blockLA = enlarge_block(H, blockL)
-    if blockL === blockR  # no need to recalculate a second time
-        blockRB = blockLA
-    else
-        blockRB = enlarge_block(H, blockR)
-    end
+    blockLA = enlarge_block_right(blockL, H)
+    blockBR = enlarge_block_left(H, blockR)
 
     @assert isvalid(blockLA)
-    @assert isvalid(blockRB)
+    @assert isvalid(blockBR)
 
-    # Construct the full superblock Hamiltonian.
+    # Construct the full superblock Hamiltonian on sites LABR. 
     @assert blockLA.χ == blockL.χ*H.p
-    @assert blockRB.χ == blockR.χ*H.p
+    @assert blockBR.χ == blockR.χ*H.p
 
-    superblock_hamiltonian = kronr(blockLA[:H], speye(blockRB.χ)) + kronr(speye(blockLA.χ), blockRB[:H]) + H2(H, blockLA.opdict, blockRB.opdict)
+    H_LABR = kronr(blockLA[:H], speye(blockBR.χ)) + 
+             kronr(speye(blockLA.χ), blockBR[:H]) + 
+             H2(H, blockLA.opdict, blockBR.opdict)
     # Call ARPACK to find the superblock ground state.  (:SR means find the
     # eigenvalue with the "smallest real" value.)
     #
     # But first, we explicitly modify the matrix so that it will be detected as
     # Hermitian by `eigs`.  (Without this step, the matrix is effectively
     # Hermitian but won't be detected as such due to small roundoff error.)
-    superblock_hamiltonian = (superblock_hamiltonian + superblock_hamiltonian') / 2
-    (energy,), psi0 = eigs(superblock_hamiltonian, nev=1, which=:SR)
+    H_LABR = (H_LABR + H_LABR') / 2
+    (energy,), psi0 = eigs(H_LABR, nev=1, which=:SR)
     # Construct the reduced density matrix of the system by tracing out the
     # environment
-    psi0 = reshape(psi0, (blockLA.χ, blockRB.χ))
+    psi0 = reshape(psi0, (blockLA.χ, blockBR.χ))
     U, s, Vd = svd(psi0)
     V = Vd'
 
@@ -173,14 +179,15 @@ function single_dmrg_step(H::NNHam, blockL::Block, blockR::Block; kwargs...)
     sV = Diagonal(s)*V
 
     tensorA = reshape(U, blockL.χ, H.p, χ)
-    tensorB = permutedims(reshape(sV, χ, blockR.χ, H.p), (1, 3, 2))
+    tensorB = reshape(sV, χ, H.p, blockR.χ)
 
     # Rotate and truncate each operator.
     newblockLA = project(blockLA, U)
+    newblockBR = project(blockBR, V')
 
     truncation_error = 1 - vecnorm(s)^2
     println("truncation error: ", truncation_error)
-    return newblockLA, energy
+    return newblockLA, newblockBR, energy
 end
 
 function graphic(sys_block::Block, env_block::Block, sys_label::Symbol=:l)
@@ -215,61 +222,74 @@ function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::Abstra
     # To keep things simple, this dictionary is not actually saved to disk, but
     # we use it to represent persistent storage.
     block_disk = Dict{Tuple{Symbol,Int},Block}()  # "disk" storage for Block objects
-    site_tensors_disk = Dict{Tuple{Symbol, Int}, Array{Float64, 3}}()
-
+    
     # Use the infinite system algorithm to build up to desired size.  Each time
     # we construct a block, we save it for future reference as both a left
     # (:l) and right (:r) block, as the infinite system algorithm assumes the
     # environment is a mirror image of the system.
-    block = initial_block(H)
-    block_disk[:l, block.L] = block
-    block_disk[:r, block.L] = block
-    while 2 * block.L < L
+    blockL = blockR = initial_block(H)
+    block_disk[:l, 1] = blockL
+    block_disk[:r, 1] = blockR
+    while (blockL.L+blockR.L) < L
         # Perform a single DMRG step and save the new Block to "disk"
-        println(graphic(block, block))
-        block, energy = single_dmrg_step(H, block, block; χmax = χ_inf)
-        println("E/L = ", energy / (block.L * 2))
-        block_disk[:l, block.L] = block
-        block_disk[:r, block.L] = block
+        println(graphic(blockL, blockR))
+        blockL, blockR, energy = single_dmrg_step(H, blockL, blockR; χmax = χ_inf)
+        println("E/L = ", energy / (blockL.L + blockR.L))
+        block_disk[:l, blockL.L] = blockL
+        block_disk[:r, blockR.L] = blockR
     end
 
     # Now that the system is built up to its full size, we perform sweeps using
     # the finite system algorithm.  At first the left block will act as the
     # system, growing at the expense of the right block (the environment), but
     # once we come to the end of the chain these roles will be reversed.
-    sys_label, env_label = :l, :r
-
-    # Rename block -> sys_block
-    sys_block = block
-    block = Block(0, 0)
+    loc = blockL.L
+    dir=:R
 
     for χ in χ_sweep
         while true
-            # Load the appropriate environment block from "disk"
-            env_block = block_disk[env_label, L - sys_block.L - 2]
-            if env_block.L == 1
-                # We've come to the end of the chain, so we reverse course.
-                sys_block, env_block = env_block, sys_block
-                sys_label, env_label = env_label, sys_label
-            end
+            if dir==:R
+                blockL = block_disk[:l, loc]
+                blockR = block_disk[:r, L - loc - 2]
+                println(repeat("=", blockL.L) * "**" * repeat("-", blockR.L))
+                blockL, _, energy = single_dmrg_step(H, blockL, blockR; χmax=χ)
+                block_disk[:l, loc+1] = blockL
+                if loc >= L-1
+                    dir = :L
+                else
+                    loc += 1
+                end
 
-            # Perform a single DMRG step.
-            println(graphic(sys_block, env_block, sys_label))
-            sys_block, energy = single_dmrg_step(H, sys_block, env_block; χmax=χ)
+            elseif dir==:L
+                blockL = block_disk[:l, loc-2]
+                blockR = block_disk[:r, L - loc]
+                println(repeat("-", blockL.L) * "**" * repeat("=", blockR.L))
+                _, blockR, energy = single_dmrg_step(H, blockL, blockR; χmax=χ)
+                block_disk[:l, L-loc+1] = blockR
+                if loc <=2
+                    dir = :R
+                else
+                    loc -= 1
+                end
+            end
 
             println("E/L = ", energy / L)
 
-            # Save the block from this step to disk.
-            block_disk[sys_label, sys_block.L] = sys_block
-
             # Check whether we just completed a full sweep.
-            if sys_label == :l && 2 * sys_block.L == L
+            if dir == :R && 2 * loc == L
                 break  # escape from the "while true" loop
             end
         end
     end
 end
 
-#infinite_system_algorithm(100, 20)
+σᶻ = [1.0 0.0; 0.0 -1.0]  # single-site S^z
+σ⁺ = [0.0 2.0; 0.0 0.0]  # single-site S^+
+σˣ = [0.0 1.0; 1.0 0.0]
+iσʸ = [0.0 1.0; -1.0 0.0]
+
+# HeisenbergXXZ(J::Float64, Jz::Float64) = NNHam(2, :Z, 0., [:Z, :P, :M], [:Z, :M, :P], [Jz/4, J/8, J/8], Dict(:Z=>σᶻ, :P=>σ⁺, :M=>σ⁺'))
+HeisenbergXXZ(J::Float64, Jz::Float64) = NNHam(2, :Z, 0., [:Z, :X, :Y], [:Z, :X, :Y], [Jz/4, J/4, -J/4], Dict(:Z=>σᶻ, :X=>σˣ, :Y=>iσʸ))
+
 H = HeisenbergXXZ(1.0, 1.0)
 finite_system_algorithm(H, 20, 10, [10, 20, 30, 40, 40])
