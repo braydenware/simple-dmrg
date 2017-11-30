@@ -255,6 +255,7 @@ function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::Abstra
 
             # Perform a single DMRG step.
             println(graphic(sys_block, env_block, sys_label))
+            @show sys_block.L, env_block.L, sys_label
             sys_block, energy = single_dmrg_step(H, sys_block, env_block; χmax=χ)
 
             println("E/L = ", energy / L)
@@ -272,4 +273,4 @@ end
 
 #infinite_system_algorithm(100, 20)
 H = HeisenbergXXZ(1.0, 1.0)
-finite_system_algorithm(H, 20, 10, [10, 20, 30, 40, 40])
+finite_system_algorithm(H, 20, 10, [10])
