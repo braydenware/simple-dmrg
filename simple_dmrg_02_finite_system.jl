@@ -209,36 +209,38 @@ function infinite_system_algorithm(H::NNHam, L::Int, χ::Int)
     end
 end
 
-function sweep(H::NNHam, L::Int, initsite::Int, block_disk::Dict{Tuple{Symbol,Int},Block}, χ::Int)
+function sweep(H::NNHam, L::Int, initsite::Int, left_blocks::Vector{Block}, right_blocks::Vector{Block}, χ::Int)
     # At first the left block will act as the
     # system, growing at the expense of the right block (the environment), but
     # once we come to the end of the chain these roles will be reversed.
-    sys_label, env_label = :l, :r
-    sys_block = block_disk[sys_label, initsite]
+    sys_blocks, env_blocks = left_blocks, right_blocks
+    sys_block = sys_blocks[initsite]
+    dir = :l
     while true
         # Load the appropriate environment block from "disk"
-        env_block = block_disk[env_label, L - sys_block.L - 2]
+        env_block = env_blocks[L - sys_block.L - 2]
         if env_block.L == 1
             # We've come to the end of the chain, so we reverse course.
             sys_block, env_block = env_block, sys_block
-            sys_label, env_label = env_label, sys_label
+            sys_blocks, env_blocks = env_blocks, sys_blocks
+            dir = dir==:l ? :r : :l
         end
 
         # Perform a single DMRG step.
-        println(graphic(sys_block, env_block, sys_label))
+        println(graphic(sys_block, env_block, dir))
         sys_block, energy = single_dmrg_step(H, sys_block, env_block; χmax=χ)
 
         println("E/L = ", energy / L)
 
         # Save the block from this step to disk.
-        block_disk[sys_label, sys_block.L] = sys_block
+        sys_blocks[sys_block.L] = sys_block
 
         # Check whether we just completed a full sweep.
-        if sys_label == :l && sys_block.L == initsite
+        if dir == :l && sys_block.L == initsite
             break  # escape from the "while true" loop
         end
     end
-    return block_disk
+    return left_blocks, right_blocks
 end
 
 function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::AbstractVector{Int})
@@ -246,23 +248,24 @@ function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::Abstra
 
     # To keep things simple, this dictionary is not actually saved to disk, but
     # we use it to represent persistent storage.
-    block_disk = Dict{Tuple{Symbol,Int},Block}()  # "disk" storage for Block objects
-    site_tensors_disk = Dict{Tuple{Symbol, Int}, Array{Float64, 3}}()
+    leftblocks = Vector{Block}(L)  # "disk" storage for Block objects
+    rightblocks = Vector{Block}(L)
 
     # Use the infinite system algorithm to build up to desired size.  Each time
     # we construct a block, we save it for future reference as both a left
     # (:l) and right (:r) block, as the infinite system algorithm assumes the
     # environment is a mirror image of the system.
     block = initial_block(H)
-    block_disk[:l, block.L] = block
-    block_disk[:r, block.L] = block
+
+    leftblocks[1] = block
+    rightblocks[1] = block
     while 2 * block.L < L
         # Perform a single DMRG step and save the new Block to "disk"
         println(graphic(block, block))
         block, energy = single_dmrg_step(H, block, block; χmax = χ_inf)
         println("E/L = ", energy / (block.L * 2))
-        block_disk[:l, block.L] = block
-        block_disk[:r, block.L] = block
+        leftblocks[block.L] = block
+        rightblocks[block.L] = block
     end
 
     # Now that the system is built up to its full size, we perform sweeps using
@@ -272,7 +275,7 @@ function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::Abstra
     block = Block(0, 0)
 
     for χ in χ_sweep
-        block_disk = sweep(H, L, initsite, block_disk, χ)
+        leftblocks, rightblocks = sweep(H, L, initsite, leftblocks, rightblocks, χ)
     end
 end
 
