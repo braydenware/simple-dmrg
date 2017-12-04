@@ -243,14 +243,20 @@ function Base.show(io::IO, state::Sweep)
 end
 
 function infinite_system_algorithm(H::NNHam, L::Int, χ::Int)
-    block = initial_block
-    # Repeatedly enlarge the system by performing a single DMRG step, using a
-    # reflection of the current block as the environment.
-    while 2 * block.L < L
-        println("L = ", block.L * 2 + 2)
-        block, energy = single_dmrg_step(H, block, block; χmax=χ)
-        println("E/L = ", energy / (block.L * 2))
+    leftblocks = Vector{Block}(L)
+    rightblocks = Vector{Block}(L)
+
+    leftblocks[1] = initial_block(H)
+    rightblocks[1] = initial_block(H)
+    sz = 1
+    while 2*sz < L
+        println("="^sz*"**"*"="^sz)
+        leftblocks[sz+1], rightblocks[sz+1], energy = single_dmrg_step(H, leftblocks[sz], rightblocks[sz]; χmax = χ)
+        println("E/L = ", energy / (sz * 2 + 2))
+        sz+=1
     end
+    println()
+    return leftblocks, rightblocks
 end
 
 function sweep(H::NNHam, L::Int, initsite::Int, left_blocks::Vector{Block}, right_blocks::Vector{Block}, χ::Int)
@@ -280,27 +286,11 @@ function sweep(H::NNHam, L::Int, initsite::Int, left_blocks::Vector{Block}, righ
 end
 
 function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::AbstractVector{Int})
-    @assert iseven(L)
-
-    # Storage of blocks
-    leftblocks = Vector{Block}(L)
-    rightblocks = Vector{Block}(L)
-
     # Use the infinite system algorithm to build up to desired size.
-    leftblocks[1] = initial_block(H)
-    rightblocks[1] = initial_block(H)
-    sz = 1
-    while 2*sz < L
-        println("="^sz*"**"*"="^sz)
-        leftblocks[sz+1], rightblocks[sz+1], energy = single_dmrg_step(H, leftblocks[sz], rightblocks[sz]; χmax = χ_inf)
-        println("E/L = ", energy / (sz * 2 + 2))
-        sz+=1
-    end
-    println()
+    leftblocks, rightblocks = infinite_system_algorithm(H, L, χ_inf)
 
     # Now that the system is built up to its full size, we perform sweeps.
-
-    initsite = sz
+    initsite = div(L, 2) + 1
     for (c, χ) in enumerate(χ_sweep)
         println("Sweep $c with χ=$χ")
         leftblocks, rightblocks = sweep(H, L, initsite, leftblocks, rightblocks, χ)
