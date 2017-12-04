@@ -209,6 +209,38 @@ function infinite_system_algorithm(H::NNHam, L::Int, χ::Int)
     end
 end
 
+function sweep(H::NNHam, L::Int, initsite::Int, block_disk::Dict{Tuple{Symbol,Int},Block}, χ::Int)
+    # At first the left block will act as the
+    # system, growing at the expense of the right block (the environment), but
+    # once we come to the end of the chain these roles will be reversed.
+    sys_label, env_label = :l, :r
+    sys_block = block_disk[sys_label, initsite]
+    while true
+        # Load the appropriate environment block from "disk"
+        env_block = block_disk[env_label, L - sys_block.L - 2]
+        if env_block.L == 1
+            # We've come to the end of the chain, so we reverse course.
+            sys_block, env_block = env_block, sys_block
+            sys_label, env_label = env_label, sys_label
+        end
+
+        # Perform a single DMRG step.
+        println(graphic(sys_block, env_block, sys_label))
+        sys_block, energy = single_dmrg_step(H, sys_block, env_block; χmax=χ)
+
+        println("E/L = ", energy / L)
+
+        # Save the block from this step to disk.
+        block_disk[sys_label, sys_block.L] = sys_block
+
+        # Check whether we just completed a full sweep.
+        if sys_label == :l && sys_block.L == initsite
+            break  # escape from the "while true" loop
+        end
+    end
+    return block_disk
+end
+
 function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::AbstractVector{Int})
     @assert iseven(L)
 
@@ -234,39 +266,13 @@ function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::Abstra
     end
 
     # Now that the system is built up to its full size, we perform sweeps using
-    # the finite system algorithm.  At first the left block will act as the
-    # system, growing at the expense of the right block (the environment), but
-    # once we come to the end of the chain these roles will be reversed.
-    sys_label, env_label = :l, :r
+    # the finite system algorithm.  A
 
-    # Rename block -> sys_block
-    sys_block = block
+    initsite = block.L
     block = Block(0, 0)
 
     for χ in χ_sweep
-        while true
-            # Load the appropriate environment block from "disk"
-            env_block = block_disk[env_label, L - sys_block.L - 2]
-            if env_block.L == 1
-                # We've come to the end of the chain, so we reverse course.
-                sys_block, env_block = env_block, sys_block
-                sys_label, env_label = env_label, sys_label
-            end
-
-            # Perform a single DMRG step.
-            println(graphic(sys_block, env_block, sys_label))
-            sys_block, energy = single_dmrg_step(H, sys_block, env_block; χmax=χ)
-
-            println("E/L = ", energy / L)
-
-            # Save the block from this step to disk.
-            block_disk[sys_label, sys_block.L] = sys_block
-
-            # Check whether we just completed a full sweep.
-            if sys_label == :l && 2 * sys_block.L == L
-                break  # escape from the "while true" loop
-            end
-        end
+        block_disk = sweep(H, L, initsite, block_disk, χ)
     end
 end
 
