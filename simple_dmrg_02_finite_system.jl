@@ -263,7 +263,7 @@ function sweep(H::NNHam, L::Int, initsite::Int, left_blocks::Vector{Block}, righ
     # At first the left block will act as the
     # system, growing at the expense of the right block (the environment), but
     # once we come to the end of the chain these roles will be reversed.
-    
+    energy = 0.
     for update in Sweep(L, initsite, +1)
         # Load the appropriate blocks from "disk"
         left_block = left_blocks[length(update.l)]
@@ -282,7 +282,7 @@ function sweep(H::NNHam, L::Int, initsite::Int, left_blocks::Vector{Block}, righ
             right_blocks[length(update.r)+1] = right_block
         end
     end
-    return left_blocks, right_blocks
+    return left_blocks, right_blocks, energy
 end
 
 function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::AbstractVector{Int})
@@ -292,8 +292,8 @@ function finite_system_algorithm(H::NNHam, L::Int, χ_inf::Int, χ_sweep::Abstra
     # Now that the system is built up to its full size, we perform sweeps.
     initsite = div(L, 2) + 1
     for (c, χ) in enumerate(χ_sweep)
-        println("Sweep $c with χ=$χ")
-        leftblocks, rightblocks = sweep(H, L, initsite, leftblocks, rightblocks, χ)
+        et = @elapsed leftblocks, rightblocks, energy = sweep(H, L, initsite, leftblocks, rightblocks, χ)
+        println("Sweep $c with χ=$χ in time $et: energy/L=$(energy/L)")
         println()
     end
 end
